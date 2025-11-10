@@ -1,76 +1,58 @@
 // ===============================
-// YANGI ODAT CLUB — Premium Subscription Bot (full skeleton)
-// Node >= 20, "type":"module"
+// YANGI ODAT CLUB — Premium Subscription Bot (HTML, full skeleton)
+// Node >= 20, package.json -> "type":"module"
 // ===============================
 
 import TelegramBot from "node-telegram-bot-api";
 import express from "express";
 import bodyParser from "body-parser";
 import fs from "fs";
-import path from "path";
-import url from "url";
 import schedule from "node-schedule";
 
 // -------------------------------
-// .ENV (Railway Variables) kutilyapti
-// -------------------------------
-// BOT_TOKEN                — Telegram bot token
-// CHANNEL_ID               — Yopiq kanal ID (masalan: -1002862428456)
-// PRICE                    — Oylik narx (default 40000)
-// ADMIN_IDS                — Adminlar ro‘yxati, vergul bilan: "123,456"
-// WEB_BASE_URL             — Sening Railway URL: https://<railway>.up.railway.app
-// AUTO_CHARGE_ENABLED      — "true" bo‘lsa real auto-charge ishga tushadi (hozircha false)
-// PAYMENT_PROVIDER         — "click" yoki "tribute" (default "click")
-// CLICK_* / TRIBUTE_*      — Keyin real integratsiya paytida to‘ldiriladi
-
-// -------------------------------
-// Global sozlamalar
+// ENV sozlamalar
 // -------------------------------
 const BOT_TOKEN = process.env.BOT_TOKEN;
-const CHANNEL_ID = process.env.CHANNEL_ID;
-const PRICE = Number(process.env.PRICE || 40000); // so'm
+const CHANNEL_ID = process.env.CHANNEL_ID;                 // -100xxxxxxxxxxxx
+const PRICE = Number(process.env.PRICE || 40000);          // so'm
 const WEB_BASE_URL = process.env.WEB_BASE_URL || "https://example.com";
-const ADMIN_IDS = (process.env.ADMIN_IDS || "").split(",").map(s => Number(s.trim())).filter(Boolean);
-const AUTO_CHARGE_ENABLED = String(process.env.AUTO_CHARGE_ENABLED || "false").toLowerCase() === "true";
+const ADMIN_IDS = (process.env.ADMIN_IDS || "")
+  .split(",")
+  .map((s) => Number(s.trim()))
+  .filter(Boolean);
+const AUTO_CHARGE_ENABLED =
+  String(process.env.AUTO_CHARGE_ENABLED || "false").toLowerCase() === "true";
 
 if (!BOT_TOKEN || !CHANNEL_ID) {
-  console.error("❌ BOT_TOKEN va CHANNEL_ID sozlamalari kerak!");
+  console.error("❌ BOT_TOKEN va CHANNEL_ID Variables’ni kiriting!");
   process.exit(1);
 }
 
 // -------------------------------
-/* Fayl saqlash joyi:
-   - Foydalanuvchilar bazasi: data.json
-   Tuzilishi user obyektlari ro‘yxati:
-   {
-     user_id, username, status ("active"|"inactive"|"grace"),
-     payment_method ("click"|"tribute"|""), joined_at, expires_at,
-     retry_count, bonus_days, remind_on (true|false), history: [{date,amount,method,status}]
-   }
-*/
+// JSON baza: data.json
+// -------------------------------
 const DATA_FILE = "data.json";
 if (!fs.existsSync(DATA_FILE)) fs.writeFileSync(DATA_FILE, "[]", "utf-8");
 
-// JSON o‘qish-yozish util
 const readUsers = () => JSON.parse(fs.readFileSync(DATA_FILE, "utf-8"));
-const writeUsers = (users) => fs.writeFileSync(DATA_FILE, JSON.stringify(users, null, 2), "utf-8");
+const writeUsers = (users) =>
+  fs.writeFileSync(DATA_FILE, JSON.stringify(users, null, 2), "utf-8");
 
-// Topish / yaratish
 function ensureUser(userId, username = "") {
   const users = readUsers();
-  let u = users.find(x => x.user_id === userId);
+  let u = users.find((x) => x.user_id === userId);
   if (!u) {
     u = {
       user_id: userId,
       username: username || "",
-      status: "inactive",
-      payment_method: "",
+      status: "inactive",       // active | inactive | grace
+      payment_method: "",       // click | tribute | ""
       joined_at: null,
       expires_at: null,
-      retry_count: 0,
-      bonus_days: 0,     // referal bonus kunlari
-      remind_on: true,   // eslatma yoqilgan/yoqilmagan
-      history: []        // to‘lovlar tarixi
+      retry_count: 0,           // auto-charge urinish sanog‘i
+      bonus_days: 0,            // referal bonus kunlari
+      remind_on: true,          // ogohlantirish xabarlari
+      history: []               // [{date, amount, method, status}]
     };
     users.push(u);
     writeUsers(users);
@@ -80,18 +62,18 @@ function ensureUser(userId, username = "") {
 
 function updateUser(userId, patch = {}) {
   const users = readUsers();
-  const idx = users.findIndex(x => x.user_id === userId);
-  if (idx === -1) return null;
-  users[idx] = { ...users[idx], ...patch };
+  const i = users.findIndex((x) => x.user_id === userId);
+  if (i === -1) return null;
+  users[i] = { ...users[i], ...patch };
   writeUsers(users);
-  return users[idx];
+  return users[i];
 }
 
 function pushPaymentHistory(userId, item) {
   const users = readUsers();
-  const idx = users.findIndex(x => x.user_id === userId);
-  if (idx === -1) return;
-  users[idx].history = [...(users[idx].history || []), item];
+  const i = users.findIndex((x) => x.user_id === userId);
+  if (i === -1) return;
+  users[i].history = [...(users[i].history || []), item];
   writeUsers(users);
 }
 
@@ -102,25 +84,49 @@ function daysLeft(expires_at) {
   return Math.ceil((exp - now) / (1000 * 60 * 60 * 24));
 }
 
-// -------------------------------
-// Telegram Bot
-// -------------------------------
-const bot = new TelegramBot(BOT_TOKEN, { polling: true });
+function escapeHtml(s = "") {
+  return String(s)
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;");
+}
 
+// -------------------------------
+// Telegram Bot — pollingni to‘g‘ri yoqish (409 oldini olish)
+// -------------------------------
+const bot = new TelegramBot(BOT_TOKEN, { polling: false });
+
+(async () => {
+  try {
+    // webhook bo‘lsa o‘chirib, eski update’larni tashlab yuboramiz
+    await bot.deleteWebHook({ drop_pending_updates: true });
+    // endi pollingni yoqamiz
+    await bot.startPolling();
+    console.log("✅ Polling boshlandi");
+  } catch (e) {
+    console.error("Polling start xatosi:", e);
+  }
+})();
+
+// -------------------------------
 // /start
+// -------------------------------
 bot.onText(/\/start/, (msg) => {
   const chatId = msg.chat.id;
-  const username = msg.from?.username ? `@${msg.from.username}` : (msg.from?.first_name || "do'stim");
+  const name =
+    msg.from?.username ? `@${escapeHtml(msg.from.username)}` : escapeHtml(msg.from?.first_name || "do'stim");
   ensureUser(chatId, msg.from?.username || "");
 
-  const text = `👋 Salom, ${username}!Bu — **Yangi Odat Club** Premium obuna bot.
-💳 Narx: **${PRICE.toLocaleString("ru-RU")} so'm / oy**
-📅 Muddati: 30 kun
-
-To‘lov usulini tanlang va bot ichidagi oynada davom eting 👇`;
-
-  bot.sendMessage(chatId, text, {
-    parse_mode: "Markdown",
+  const text = [
+    `👋 Salom, <b>${name}</b>!`,
+    ``,
+    `Bu — <b>Yangi Odat Club</b> Premium obuna bot.`,
+    `💳 Narx: <b>${PRICE.toLocaleString("ru-RU")} so'm / oy</b>`,
+    `📅 Muddati: <b>30 kun</b>`,
+    ``,
+    `To‘lov usulini tanlang va bot ichidagi oynada davom eting 👇`
+  ].join("\n");bot.sendMessage(chatId, text, {
+    parse_mode: "HTML",
     reply_markup: {
       inline_keyboard: [
         [
@@ -146,24 +152,29 @@ To‘lov usulini tanlang va bot ichidagi oynada davom eting 👇`;
 // /subscribe (shortcut)
 bot.onText(/\/subscribe/, (msg) => {
   const chatId = msg.chat.id;
-  bot.sendMessage(chatId, `💳 To‘lov uchun usul tanlang`, {
-    reply_markup: {
-      inline_keyboard: [
-        [
-          {
-            text: "🇺🇿 Click — kartadan to‘lov",
-            web_app: { url: `${WEB_BASE_URL}/pay?method=click&user=${chatId}` }
-          }
-        ],
-        [
-          {
-            text: "🌍 Tribute — Visa/MasterCard",
-            web_app: { url: `${WEB_BASE_URL}/pay?method=tribute&user=${chatId}` }
-          }
+  bot.sendMessage(
+    chatId,
+    `💳 To‘lov usulini tanlang:`,
+    {
+      parse_mode: "HTML",
+      reply_markup: {
+        inline_keyboard: [
+          [
+            {
+              text: "🇺🇿 Click — kartadan to‘lov",
+              web_app: { url: `${WEB_BASE_URL}/pay?method=click&user=${chatId}` }
+            }
+          ],
+          [
+            {
+              text: "🌍 Tribute — Visa/MasterCard",
+              web_app: { url: `${WEB_BASE_URL}/pay?method=tribute&user=${chatId}` }
+            }
+          ]
         ]
-      ]
+      }
     }
-  });
+  );
 });
 
 // /my — foydalanuvchi paneli
@@ -173,15 +184,17 @@ bot.onText(/\/my/, (msg) => showMyStatus(msg.chat.id));
 bot.onText(/\/payments/, (msg) => {
   const u = ensureUser(msg.chat.id, msg.from?.username || "");
   const hist = u.history || [];
-  if (!hist.length) return bot.sendMessage(msg.chat.id, "🧾 To‘lov tarixi hozircha bo‘sh.");
+  if (!hist.length) return bot.sendMessage(msg.chat.id, "🧾 To‘lov tarixi hozircha bo‘sh.", { parse_mode: "HTML" });
 
   const last5 = hist.slice(-5).reverse();
-  const list = last5.map((h, i) => {
-    const d = new Date(h.date);
-    return `${i + 1}️⃣  ${d.toLocaleDateString()} — ${Number(h.amount).toLocaleString("ru-RU")} so‘m — ${h.method} — ${h.status === "success" ? "✅" : "❌"}`;
-  }).join("\n");
+  const list = last5
+    .map((h, i) => {
+      const d = new Date(h.date);
+      return `${i + 1}️⃣  ${d.toLocaleDateString()} — ${Number(h.amount).toLocaleString("ru-RU")} so‘m — ${escapeHtml(h.method)} — ${h.status === "success" ? "✅" : "❌"}`;
+    })
+    .join("\n");
 
-  bot.sendMessage(msg.chat.id, `🧾 So‘nggi to‘lovlar:\n${list}`);
+  bot.sendMessage(msg.chat.id, `🧾 So‘nggi to‘lovlar:\n${list}`, { parse_mode: "HTML" });
 });
 
 // /reminder — eslatma yoq/och
@@ -189,21 +202,26 @@ bot.onText(/\/reminder/, (msg) => {
   const u = ensureUser(msg.chat.id, msg.from?.username || "");
   const newVal = !u.remind_on;
   updateUser(u.user_id, { remind_on: newVal });
-  bot.sendMessage(u.user_id, newVal ? "🔔 Eslatma Yoqildi." : "🔕 Eslatma O‘chirildi.");
+  bot.sendMessage(u.user_id, newVal ? "🔔 Eslatma YOQILDI." : "🔕 Eslatma O‘CHIRILDI.", { parse_mode: "HTML" });
 });
 
 // Admin: /stats
 bot.onText(/\/stats/, (msg) => {
   if (!ADMIN_IDS.includes(msg.chat.id)) return;
   const users = readUsers();
-  const active = users.filter(u => u.status === "active").length;
-  const grace = users.filter(u => u.status === "grace").length;
+  const active = users.filter((u) => u.status === "active").length;
+  const grace = users.filter((u) => u.status === "grace").length;
   const total = users.length;
-  bot.sendMessage(msg.chat.id,
-    `📊 Statistika:
-Jami user: ${total}
-Faol (active): ${active}
-Kutilayotgan (grace/bonus): ${grace}`);
+  bot.sendMessage(
+    msg.chat.id,
+    [
+      `📊 <b>Statistika</b>`,
+      `Jami user: <b>${total}</b>`,
+      `Faol (active): <b>${active}</b>`,
+      `Kutilayotgan (grace/bonus): <b>${grace}</b>`
+    ].join("\n"),
+    { parse_mode: "HTML" }
+  );
 });
 
 // Admin: /bonus <userId | @username> <kun>
@@ -211,32 +229,39 @@ bot.onText(/\/bonus(?:\s+(.+))?/, (msg, match) => {
   if (!ADMIN_IDS.includes(msg.chat.id)) return;
   const args = (match?.[1] || "").trim().split(/\s+/).filter(Boolean);
   if (args.length < 2) {
-    return bot.sendMessage(msg.chat.id, `Foydalanish: /bonus <userId | @username> <kun>\nMasalan: /bonus @bekjon 5`);
+    return bot.sendMessage(
+      msg.chat.id,
+      `Foydalanish: <code>/bonus &lt;userId | @username&gt; &lt;kun&gt;</code>\nMasalan: <code>/bonus @bekjon 5</code>`,
+      { parse_mode: "HTML" }
+    );
   }
 
   const who = args[0];
   const days = Number(args[1]) || 0;
-  if (days <= 0) return bot.sendMessage(msg.chat.id, "Kun soni noto‘g‘ri.");
+  if (days <= 0) return bot.sendMessage(msg.chat.id, "Kun soni noto‘g‘ri.", { parse_mode: "HTML" });
 
   const users = readUsers();
   let target = null;
 
   if (/^@/.test(who)) {
     const uname = who.replace("@", "");
-    target = users.find(u => (u.username || "").toLowerCase() === uname.toLowerCase());
+    target = users.find((u) => (u.username || "").toLowerCase() === uname.toLowerCase());
   } else {
     const uid = Number(who);
-    target = users.find(u => u.user_id === uid);
+    target = users.find((u) => u.user_id === uid);
   }
 
-  if (!target) return bot.sendMessage(msg.chat.id, "User topilmadi.");
+  if (!target) return bot.sendMessage(msg.chat.id, "User topilmadi.", { parse_mode: "HTML" });
 
   const newBonus = (target.bonus_days || 0) + days;
-  updateUser(target.user_id, { bonus_days: newBonus, status: target.status === "inactive" ? "grace" : target.status });
+  updateUser(target.user_id, {
+    bonus_days: newBonus,
+    status: target.status === "inactive" ? "grace" : target.status
+  });bot.sendMessage(msg.chat.id, `✅ ${escapeHtml(who)} foydalanuvchisiga <b>${days}</b> kun BONUS berildi. (Jami: <b>${newBonus}</b> kun)`, { parse_mode: "HTML" });
+  bot.sendMessage(target.user_id, `🏅 Sizga <b>${days}</b> kun BONUS berildi! Jami bonus: <b>${newBonus}</b> kun.`, { parse_mode: "HTML" });
+});
 
-  bot.sendMessage(msg.chat.id, `✅ ${who} foydalanuvchisiga ${days} kun bonus berildi. (Jami bonus: ${newBonus} kun)`);
-  bot.sendMessage(target.user_id, `🏅 Sizga ${days} kun BONUS berildi! Jami bonus: ${newBonus} kun.`);
-});// Inline "📊 Mening obunam"
+// Inline "📊 Mening obunam"
 bot.on("callback_query", (q) => {
   if (q.data === "my_status") {
     showMyStatus(q.from.id).catch(() => {});
@@ -249,21 +274,24 @@ async function showMyStatus(userId) {
   const left = daysLeft(u.expires_at);
   const started = u.joined_at ? new Date(u.joined_at).toLocaleDateString() : "-";
   const exp = u.expires_at ? new Date(u.expires_at).toLocaleDateString() : "-";
-  const statusEmoji = u.status === "active" ? "✅" : (u.status === "grace" ? "🟡" : "❌");
+  const statusEmoji = u.status === "active" ? "✅" : u.status === "grace" ? "🟡" : "❌";
 
-  const text = `📊 **Mening obunam**
-────────────────────
-Holat: ${statusEmoji} ${u.status}
-Boshlangan: ${started}
-Tugash sanasi: ${exp}
-Qolgan: ${left > 0 ? left + " kun" : (u.status === "active" ? "bugun" : "—")}
-To‘lov usuli: ${u.payment_method || "-"}
-Bonus: ${u.bonus_days || 0} kun
-Eslatma: ${u.remind_on ? "🔔 Yoqilgan" : "🔕 O‘chik"}
-────────────────────
-💳 Narx: ${PRICE.toLocaleString("ru-RU")} so‘m / oy`;
+  const text = [
+    `📊 <b>Mening obunam</b>`,
+    `────────────────────`,
+    `Holat: ${statusEmoji} <b>${escapeHtml(u.status)}</b>`,
+    `Boshlangan: <b>${escapeHtml(started)}</b>`,
+    `Tugash sanasi: <b>${escapeHtml(exp)}</b>`,
+    `Qolgan: <b>${left > 0 ? left + " kun" : (u.status === "active" ? "bugun" : "—")}</b>`,
+    `To‘lov usuli: <b>${escapeHtml(u.payment_method || "-")}</b>`,
+    `Bonus: <b>${u.bonus_days || 0} kun</b>`,
+    `Eslatma: ${u.remind_on ? "🔔" : "🔕"}`,
+    `────────────────────`,
+    `💳 Narx: <b>${PRICE.toLocaleString("ru-RU")} so'm / oy</b>`
+  ].join("\n");
 
-  await bot.sendMessage(userId, text, { parse_mode: "MarkdownV2",
+  await bot.sendMessage(userId, text, {
+    parse_mode: "HTML",
     reply_markup: {
       inline_keyboard: [
         [
@@ -278,26 +306,26 @@ Eslatma: ${u.remind_on ? "🔔 Yoqilgan" : "🔕 O‘chik"}
 }
 
 // -------------------------------
-// Express — mini-web (WebApp va Callbacklar)
+/* EXPRESS — WebApp / Callbacks
+   /pay — Telegram WebApp oynasi (soddalashtirilgan mock)
+   /payment/mock — test to‘lov (real gateway o‘rniga)
+   /click/callback — Click REAL callback (TODO: imzo tekshiruvi)
+   /tribute/callback — Tribute REAL callback (TODO: imzo tekshiruvi)
+*/
 // -------------------------------
 const app = express();
 app.use(bodyParser.json());
 app.use(bodyParser.urlencoded({ extended: true }));
 
-// /pay — Telegram WebApp oynasi (soddalashtirilgan, gatewayga yo‘naltiruvchi)
+// WebApp: To‘lov sahifasi (mock)
 app.get("/pay", (req, res) => {
   const method = String(req.query.method || "click");
   const user = Number(req.query.user || 0);
   const valid = ["click", "tribute"].includes(method);
 
-  if (!user || !valid) {
-    return res.status(400).send("Invalid parameters");
-  }
+  if (!user || !valid) return res.status(400).send("Invalid parameters");
 
-  // Bu yerda real hayotda siz Click/Tribute sahifasini ochasiz yoki redirect berasiz.
-  // Hozircha sinov: “To‘lovni tasdiqlash” tugmasi bilan mock.
-  const html = `
-<!DOCTYPE html><html><head><meta charset="utf-8"/><title>To'lov</title></head>
+  const html = `<!DOCTYPE html><html><head><meta charset="utf-8"/><title>To'lov</title></head>
 <body style="font-family:Arial;padding:18px">
   <h2>Yangi Odat Club — Obuna to'lovi</h2>
   <p>Foydalanuvchi: <b>${user}</b></p>
@@ -311,21 +339,21 @@ app.get("/pay", (req, res) => {
     <button type="submit" style="padding:10px 16px">✅ Sinov uchun to'lovni tasdiqlash</button>
   </form>
 </body></html>`;
+
   res.setHeader("Content-Type", "text/html; charset=utf-8");
   res.send(html);
 });
 
-// /payment/mock — test rejimi uchun (real gateway o‘rniga)
+// Mock payment: sinov uchun muvaffaqiyatli to‘lov
 app.post("/payment/mock", async (req, res) => {
   try {
     const userId = Number(req.body.user);
     const method = String(req.body.method || "click");
-
     if (!userId) return res.status(400).send("user required");
 
-    // Muvaffaqiyatli “test” to‘lov
     const now = new Date();
-    const exp = new Date(now); exp.setDate(exp.getDate() + 30);
+    const exp = new Date(now);
+    exp.setDate(exp.getDate() + 30);
 
     ensureUser(userId);
     updateUser(userId, {
@@ -340,34 +368,37 @@ app.post("/payment/mock", async (req, res) => {
       amount: PRICE,
       method,
       status: "success"
-    });
-
-    // Kanalga qo‘shish
-    try {
+    });try {
       await bot.unbanChatMember(CHANNEL_ID, userId);
-      await bot.sendMessage(userId, `✅ To‘lov tasdiqlandi (test).
-Siz 30 kunlik PREMIUMga qo‘shildingiz!`);
+      await bot.sendMessage(
+        userId,
+        `✅ To‘lov tasdiqlandi (test).\nSiz 30 kunlik PREMIUMga qo‘shildingiz!`,
+        { parse_mode: "HTML" }
+      );
     } catch (e) {
-      console.error("Kanalga qo'shishda xatolik:", e.message);
-    }res.setHeader("Content-Type", "text/html; charset=utf-8");
-    return res.send(`<p>✅ Test to'lov muvaffaqiyatli! Telegram'ga qaytishingiz mumkin.</p>`);
+      console.error("Kanalga qo‘shishda xato:", e.message);
+    }
+
+    res.setHeader("Content-Type", "text/html; charset=utf-8");
+    res.send(`<p>✅ Test to'lov muvaffaqiyatli! Telegram'ga qaytishingiz mumkin.</p>`);
   } catch (e) {
     console.error(e);
-    return res.status(500).send("server error");
+    res.status(500).send("server error");
   }
 });
 
-// CLICK callback (REAL) — TODO: imzo tekshiruvi va maydonlar
+// CLICK callback (REAL) — TODO: imzo tekshiruvi
 app.post("/click/callback", async (req, res) => {
   const data = req.body || {};
   try {
     // TODO: SIGNATURE tekshirish (SECRET_KEY bilan)
-    // Muvaffaqiyatli bo'lsa:
     if (Number(data.status) === 0 && Number(data.amount) === PRICE) {
       const userId = Number(String(data.merchant_trans_id || "").replace("user", ""));
       if (userId) {
         const now = new Date();
-        const exp = new Date(now); exp.setDate(exp.getDate() + 30);
+        const exp = new Date(now);
+        exp.setDate(exp.getDate() + 30);
+
         ensureUser(userId);
         updateUser(userId, {
           status: "active",
@@ -385,10 +416,9 @@ app.post("/click/callback", async (req, res) => {
 
         try {
           await bot.unbanChatMember(CHANNEL_ID, userId);
-          await bot.sendMessage(userId, `✅ Click to'lovi qabul qilindi.
-PREMIUM 30 kunga faollashtirildi.`);
+          await bot.sendMessage(userId, `✅ Click to'lovi qabul qilindi.\nPREMIUM 30 kunga faollashtirildi.`, { parse_mode: "HTML" });
         } catch (e) {
-          console.error("Kanalga qo'shish xatosi:", e.message);
+          console.error("Kanalga qo‘shish xatosi:", e.message);
         }
       }
     }
@@ -398,7 +428,7 @@ PREMIUM 30 kunga faollashtirildi.`);
   res.json({ status: "ok" });
 });
 
-// TRIBUTE callback (REAL) — TODO: imzo tekshiruvi va maydonlar
+// TRIBUTE callback (REAL) — TODO: imzo tekshiruvi
 app.post("/tribute/callback", async (req, res) => {
   const data = req.body || {};
   try {
@@ -407,7 +437,9 @@ app.post("/tribute/callback", async (req, res) => {
       const userId = Number(String(data.reference || "").replace("user", ""));
       if (userId) {
         const now = new Date();
-        const exp = new Date(now); exp.setDate(exp.getDate() + 30);
+        const exp = new Date(now);
+        exp.setDate(exp.getDate() + 30);
+
         ensureUser(userId);
         updateUser(userId, {
           status: "active",
@@ -422,12 +454,12 @@ app.post("/tribute/callback", async (req, res) => {
           method: "tribute",
           status: "success"
         });
+
         try {
           await bot.unbanChatMember(CHANNEL_ID, userId);
-          await bot.sendMessage(userId, `✅ Tribute to'lovi qabul qilindi.
-PREMIUM 30 kunga faollashtirildi.`);
+          await bot.sendMessage(userId, `✅ Tribute to'lovi qabul qilindi.\nPREMIUM 30 kunga faollashtirildi.`, { parse_mode: "HTML" });
         } catch (e) {
-          console.error("Kanalga qo'shish xatosi:", e.message);
+          console.error("Kanalga qo‘shish xatosi:", e.message);
         }
       }
     }
@@ -438,67 +470,54 @@ PREMIUM 30 kunga faollashtirildi.`);
 });
 
 // -------------------------------
-// CRON — kuniga 2 marta tekshiruv
+// CRON — 12 soatda tekshiruv (expiry + retry + kick)
 // -------------------------------
 schedule.scheduleJob("0 */12 * * *", async () => {
   const users = readUsers();
   const now = new Date();
 
   for (const u of users) {
-    // Bonusni “grace” sifatida tutamiz: expires tugagan bo‘lsa ham bonus bor — chiqarilmaydi
-    if (u.bonus_days && u.bonus_days > 0) {
-      // Har 24 soatda 1 kun kamayadi (12 soatda emas, lekin ishni soddalashtiramiz: faqat bir marta kuniga kamaytirishni xohlasang,
-      // yuqorida cron vaqtini "0 9 * * *" (har kuni 09:00) qilib o'zgartir).
-      // Biz 12 soatlikda kamaytirmaymiz. Faqat tekshiramiz.
-      // Bonus bo'lsa — chiqarish YO'Q.
-      continue;
-    }
+    // Bonus bor — chiqarishni kutamiz (bonus kamayishi alohida jobda)
+    if (u.bonus_days && u.bonus_days > 0) continue;
 
-    // Faol bo'lmaganlarga o'tmaymiz
+    // Faqat active/grace holatlar muhim
     if (u.status !== "active" && u.status !== "grace") continue;
 
-    const expired = u.expires_at ? (new Date(u.expires_at) < now) : false;
-
+    const expired = u.expires_at ? new Date(u.expires_at) < now : false;
     if (!expired) continue; // hali tugamagan
 
-    // Expires tugagan — endi auto-charge
+    // Muddati tugagan — auto-charge
     if (!AUTO_CHARGE_ENABLED) {
-      // Hozircha sinov: auto-charge “muvaffaqiyatsiz” deb tasavvur qilamiz
+      // Test rejim: muvaffaqiyatsiz urinish sifatida belgilaymiz
       const rc = (u.retry_count || 0) + 1;
       updateUser(u.user_id, { retry_count: rc, status: "grace" });if (rc >= 3) {
-        // Bonus yo‘q va 3 urinishdan keyin — chiqaramiz
+        // 3 urinishdan keyin chiqaramiz (bonus yo‘q)
         try {
           await bot.kickChatMember(CHANNEL_ID, u.user_id);
           updateUser(u.user_id, { status: "inactive" });
-          await bot.sendMessage(u.user_id, "❌ To‘lov amalga oshmadi. Siz premium kanal ro‘yxatidan chiqarildingiz.");
+          await bot.sendMessage(u.user_id, "❌ To‘lov amalga oshmadi. Siz premium kanal ro‘yxatidan chiqarildingiz.", { parse_mode: "HTML" });
         } catch (e) {
           console.error("Chiqarishda xato:", e.message);
         }
       } else {
         // Ogohlantirish
         if (u.remind_on) {
-          await bot.sendMessage(u.user_id, `⚠️ To‘lov muvaffaqiyatsiz (urinish ${rc}/3).
-Iltimos, kartangizni to‘ldiring yoki obunani qayta faollashtiring.`);
+          await bot.sendMessage(
+            u.user_id,
+            `⚠️ To‘lov muvaffaqiyatsiz (urinish ${rc}/3).\nIltimos, kartangizni to‘ldiring yoki obunani qayta faollashtiring.`,
+            { parse_mode: "HTML" }
+          );
         }
       }
-
     } else {
-      // REAL AUTO-CHARGE BLok (TODO: Click/Tribute repeatPayment)
-      // Agar muvaffaqiyatli bo‘lsa:
-      //  - retry_count=0
-      //  - expires_at = now + 30 days
-      //  - status="active"
-      //  - history.push({ ..., status:"success" })
-      // Agar muvaffaqiyatsiz bo‘lsa:
-      //  - retry_count += 1
-      //  - 3 ga yetganda kick
-      // Hozircha ushbu qismni keyin to‘ldirasan.
+      // REAL AUTO-CHARGE (TODO: Click/Tribute repeatPayment)
+      //  - muvaffaqiyatli: retry_count=0, expires_at +30, status="active", history push
+      //  - muvaffaqiyatsiz: retry_count++, 3 da kick
     }
   }
-  // Bonusni kamaytirish uchun ALohida kundalik job qo‘yish mumkin:
 });
 
-// Bonusni har kuni 09:00 da -1 ga tushirish (agar >0)
+// Bonusni har kuni 09:00 da 1 kunga kamaytirish
 schedule.scheduleJob("0 9 * * *", () => {
   const users = readUsers();
   let changed = false;
@@ -506,19 +525,16 @@ schedule.scheduleJob("0 9 * * *", () => {
     if (u.bonus_days && u.bonus_days > 0) {
       u.bonus_days = u.bonus_days - 1;
       changed = true;
-      // bonus tugasa status "active" bo‘lsa ham qolgani o‘z joyida; keyingi cron da expire va retry ishlaydi
     }
   }
   if (changed) writeUsers(users);
 });
 
 // -------------------------------
-// Server
+// Server — Expressni ishga tushirish
 // -------------------------------
 const PORT = Number(process.env.PORT || 3000);
-const server = express();
-server.use(app); // barcha marshrutlar shu app ichida
-server.listen(PORT, () => {
+app.listen(PORT, () => {
   console.log(`✅ Server ishga tushdi: PORT ${PORT}`);
 });
-console.log("🤖 Bot polling boshlandi…");
+console.log("🤖 Bot ishga tushdi (HTML, polling).");
