@@ -243,4 +243,4 @@ schedule.scheduleJob("0 9 * * *",()=>{
 
 // ==================  SERVER START  =================
 const PORT=process.env.PORT||3000;
-app.listen(PORT,()=>console.log(✅ Server ishga tushdi → ${PORT}));
+app.listen(PORT,()=>console.log(`✅ Server ishga tushdi → ${PORT}`));
