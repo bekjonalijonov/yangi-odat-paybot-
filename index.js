@@ -113,8 +113,8 @@ bot.onText(/\/start/, (msg) => {
   const username = msg.from?.username ? `@${msg.from.username}` : (msg.from?.first_name || "do'stim");
   ensureUser(chatId, msg.from?.username || "");
 
-  const text = `👋 Salom, ${username}!Bu — *Yangi Odat Club* Premium obuna bot.
-💳 Narx: *${PRICE.toLocaleString("ru-RU")} so'm / oy*
+  const text = `👋 Salom, ${username}!Bu — **Yangi Odat Club** Premium obuna bot.
+💳 Narx: **${PRICE.toLocaleString("ru-RU")} so'm / oy**
 📅 Muddati: 30 kun
 
 To‘lov usulini tanlang va bot ichidagi oynada davom eting 👇`;
@@ -251,7 +251,7 @@ async function showMyStatus(userId) {
   const exp = u.expires_at ? new Date(u.expires_at).toLocaleDateString() : "-";
   const statusEmoji = u.status === "active" ? "✅" : (u.status === "grace" ? "🟡" : "❌");
 
-  const text = `📊 *Mening obunam*
+  const text = `📊 **Mening obunam**
 ────────────────────
 Holat: ${statusEmoji} ${u.status}
 Boshlangan: ${started}
@@ -263,7 +263,7 @@ Eslatma: ${u.remind_on ? "🔔 Yoqilgan" : "🔕 O‘chik"}
 ────────────────────
 💳 Narx: ${PRICE.toLocaleString("ru-RU")} so‘m / oy`;
 
-  await bot.sendMessage(userId, text, { parse_mode: "Markdown",
+  await bot.sendMessage(userId, text, { parse_mode: "MarkdownV2",
     reply_markup: {
       inline_keyboard: [
         [
