@@ -20,7 +20,7 @@ const ADMIN_IDS = (process.env.ADMIN_IDS || "")
   .filter(Boolean);
 const AUTO_CHARGE_ENABLED = String(process.env.AUTO_CHARGE_ENABLED || "false").toLowerCase() === "true";
 
-if (!BOT_TOKEN  !CHANNEL_ID  !WEB_BASE_URL) {
+if (!BOT_TOKEN || !CHANNEL_ID || !WEB_BASE_URL) {
   console.error("❌ BOT_TOKEN, CHANNEL_ID, WEB_BASE_URL majburiy!");
   process.exit(1);
 }
