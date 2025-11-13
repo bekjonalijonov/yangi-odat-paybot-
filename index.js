@@ -1,7 +1,6 @@
 // ================================================
-//  YANGI ODAT CLUB — PREMIUM SUBSCRIPTION BOT v3
-//  MongoDB + Auto Charge + Ready for Click/Tribute
-//  Professional Architecture (Node >= 20)
+//  Yangi Odat Club — Premium Subscription Bot (Mongo Edition)
+//  Node >= 20, Railway MongoDB
 // ================================================
 
 import TelegramBot from "node-telegram-bot-api";
@@ -10,80 +9,59 @@ import bodyParser from "body-parser";
 import mongoose from "mongoose";
 import schedule from "node-schedule";
 
-// ================== ENV ===================
+import User from "./models/User.js";
+import Payment from "./models/Payment.js";
+
+// ===================== ENV ======================
 const BOT_TOKEN = process.env.BOT_TOKEN;
 const CHANNEL_ID = process.env.CHANNEL_ID;
 const PRICE = Number(process.env.PRICE || 40000);
 const WEB_BASE_URL = process.env.WEB_BASE_URL;
-const MONGO_URI = process.env.MONGO_URI;
-const AUTO_CHARGE_ENABLED =
-  String(process.env.AUTO_CHARGE_ENABLED || "false").toLowerCase() === "true";
+const AUTO_CHARGE_ENABLED = String(process.env.AUTO_CHARGE_ENABLED || "false").toLowerCase() === "true";
+const MONGO_URI = process.env.MONGODB_URL;
 
 if (!BOT_TOKEN || !CHANNEL_ID || !WEB_BASE_URL || !MONGO_URI) {
-  console.error("❌ ENV parametrlari to‘liq emas");
+  console.error("❌ BOT_TOKEN, CHANNEL_ID, WEB_BASE_URL, MONGODB_URL kerak!");
   process.exit(1);
 }
 
-// ================== MONGO CONNECT ===================
-await mongoose.connect(MONGO_URI);
-console.log("🍃 MongoDB ulandi");
+// ===================== MONGO =====================
+mongoose.connect(MONGO_URI, {
+  dbName: "yangiOdatDB"
+})
+.then(() => console.log("🍃 MongoDB ulandi"))
+.catch(err => console.error("❌ Mongo xato:", err));
 
-// ================== MONGO SCHEMA ====================
-const userSchema = new mongoose.Schema({
-  user_id: Number,
-  username: String,
-  status: String, // inactive | active | grace
-  payment_method: String,
-  joined_at: Date,
-  expires_at: Date,
-  retry_count: Number,
-  bonus_days: Number,
-  remind_on: Boolean,
-});
+// ===================== BOT =======================
+const bot = new TelegramBot(BOT_TOKEN, { polling: true });
+console.log("🤖 Bot ishlayapti...");
 
-const paymentSchema = new mongoose.Schema({
-  user_id: Number,
-  date: Date,
-  amount: Number,
-  method: String,
-  status: String, // success | fail
-});
-
-const User = mongoose.model("User", userSchema);
-const Payment = mongoose.model("Payment", paymentSchema);
-
-// =============== HELPERS ==================
+// ===================== HELPERS ===================
 async function ensureUser(id, username = "") {
   let u = await User.findOne({ user_id: id });
   if (!u) {
-    u = await User.create({
-      user_id: id,
-      username,
-      status: "inactive",
-      payment_method: "",
-      joined_at: null,
-      expires_at: null,
-      retry_count: 0,
-      bonus_days: 0,
-      remind_on: true,
-    });
+    u = await User.create({ user_id: id, username });
   }
   return u;
 }
 
-function daysLeft(date) {
-  if (!date) return 0;
-  return Math.ceil((new Date(date) - new Date()) / 86400000);
+async function updateUser(id, patch) {
+  return await User.findOneAndUpdate(
+    { user_id: id },
+    { $set: patch },
+    { new: true }
+  );
 }
 
-const escapeHtml = (s = "") =>
-  s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+async function addPayment(id, data) {
+  await Payment.create({ user_id: id, ...data });
+  await User.updateOne(
+    { user_id: id },
+    { $push: { history: data } }
+  );
+}
 
-// ================= BOT START ==================
-const bot = new TelegramBot(BOT_TOKEN, { polling: true });
-console.log("🤖 Bot ishga tushdi...");
-
-// ================== MAIN MENU ====================
+// ===================== UI MENU ===================
 function mainMenu() {
   return {
     inline_keyboard: [
@@ -91,323 +69,285 @@ function mainMenu() {
       [{ text: "💳 To‘lovlar tarixi", callback_data: "menu_payments" }],
       [{ text: "⚙️ Sozlamalar", callback_data: "menu_settings" }],
       [{ text: "📚 FAQ", callback_data: "menu_faq" }],
-      [{ text: "📞 Aloqa", callback_data: "menu_support" }],
-    ],
+      [{ text: "📞 Yordam", callback_data: "menu_support" }]
+    ]
   };
 }
 
-// ================= START ===================
+const escapeHtml = s =>
+  String(s || "").replace(/&/g, "&amp;")
+                 .replace(/</g, "&lt;")
+                 .replace(/>/g, "&gt;");
+
+// ===================== /START ====================
 bot.onText(/\/start/, async (msg) => {
   const id = msg.chat.id;
   const name = escapeHtml(msg.from.first_name || "do‘st");
+
   await ensureUser(id, msg.from.username);
 
-  bot.sendMessage(
-    id,
-    `<b>👋 Salom, ${name}!</b>
+  bot.sendMessage(id, `
+<b>👋 Salom, ${name}!</b>
 
-Bu — <b>Yangi Odat Club Premium</b> obuna bot.
+Bu bot orqali Yangi Odat Club Premium obunasini boshqarasiz.
 
-💰 Narx: <b>${PRICE.toLocaleString()} so‘m / oy</b>
+💰 Narx: <b>${PRICE} so‘m / oy</b>
 ⏳ Muddati: 30 kun
 
-👇 Asosiy menyu`,
-    { parse_mode: "HTML", reply_markup: mainMenu() }
-  );
+👇 Quyidagi menyulardan foydalaning:
+`, { parse_mode: "HTML", reply_markup: mainMenu() });
 });
 
-// ================= CALLBACK MENULAR ==================
+// ===================== MENU HANDLER ==============
 bot.on("callback_query", async (q) => {
   const id = q.from.id;
   const data = q.data;
   const u = await ensureUser(id);
 
-  // 1) OBUNA BO‘LIMI
-  if (data === "menu_sub") {
-    const left = daysLeft(u.expires_at);
-    const status =
-      u.status === "active"
-        ? "✅ Faol"
-        : u.status === "grace"
-        ? "🟡 Kutilmoqda"
+  switch (data) {
+
+    case "menu_sub": {
+      const left = u.expires_at
+        ? Math.ceil((new Date(u.expires_at) - new Date()) / 86400000)
+        : 0;
+
+      const status =
+        u.status === "active" ? "✅ Faol"
+        : u.status === "grace" ? "🟡 Kutilmoqda"
         : "❌ Faolsiz";
 
-    const text = `<b>📊 Obuna holati</b>
+      const text = `
+<b>📊 Obuna holati</b>
 
 Holat: ${status}
-Boshlangan: <b>${u.joined_at ? u.joined_at.toLocaleDateString() : "—"}</b>
-Tugash: <b>${u.expires_at ? u.expires_at.toLocaleDateString() : "—"}</b>
-Qolgan: <b>${left > 0 ? left + " kun" : "—"}</b>
-Bonus: <b>${u.bonus_days} kun</b>
-To‘lov usuli: <b>${u.payment_method || "—"}</b>
+Boshlangan: <b>${u.joined_at ? new Date(u.joined_at).toLocaleDateString() : "-"}</b>
+Tugash: <b>${u.expires_at ? new Date(u.expires_at).toLocaleDateString() : "-"}</b>
+Qolgan kun: <b>${left}</b>
+Bonus kunlar: <b>${u.bonus_days}</b>
 
-💳 Narx: <b>${PRICE.toLocaleString()} so‘m</b>`;
+💳 Yangilash:
+`;
 
-    return bot.editMessageText(text, {
-      chat_id: id,
-      message_id: q.message.message_id,
-      parse_mode: "HTML",
-      reply_markup: {
-        inline_keyboard: [
-          [
-            {
-              text: "💳 Yangilash (Click)",
-              url: `${WEB_BASE_URL}/pay?method=click&user=${id}`,
-            },
-          ],
-          [
-            {
-              text: "🌍 Yangilash (Tribute)",
-              url: `${WEB_BASE_URL}/pay?method=tribute&user=${id}`,
-            },
-          ],
-          [{ text: "⬅️ Ortga", callback_data: "back_main" }],
-        ],
-      },
-    });
-  }
-
-  // 2) TO‘LOV TARIXI
-  if (data === "menu_payments") {
-    const payments = await Payment.find({ user_id: id })
-      .sort({ date: -1 })
-      .limit(10);
-
-    const list = payments
-      .map(
-        (p, i) =>
-          `${i + 1}. ${p.date.toLocaleDateString()} — ${p.amount} so‘m — ${
-            p.method
-          } ${p.status === "success" ? "✅" : "❌"}`
-      )
-      .join("\n");
-
-    return bot.editMessageText(`<b>💳 To‘lovlar</b>\n\n${list}`, {
-      chat_id: id,
-      message_id: q.message.message_id,
-      parse_mode: "HTML",
-      reply_markup: { inline_keyboard: [[{ text: "⬅️ Ortga", callback_data: "back_main" }]] },
-    });
-  }
-
-  // 3) SOZLAMALAR
-  if (data === "menu_settings") {
-    return bot.editMessageText(
-      `<b>⚙️ Sozlamalar</b>
-
-Eslatmalar: ${u.remind_on ? "🔔 Yoqilgan" : "🔕 O‘chirilgan"}`,
-      {
+      return bot.editMessageText(text, {
         chat_id: id,
         message_id: q.message.message_id,
         parse_mode: "HTML",
         reply_markup: {
           inline_keyboard: [
-            [
-              {
-                text: u.remind_on ? "🔕 O‘chirish" : "🔔 Yoqish",
-                callback_data: "toggle_remind",
-              },
-            ],
-            [{ text: "⬅️ Ortga", callback_data: "back_main" }],
-          ],
-        },
-      }
-    );
-  }
+            [{ text: "💳 Click orqali", web_app: { url: `${WEB_BASE_URL}/pay?method=click&user=${id}` }}],
+            [{ text: "🌍 Tribute orqali", web_app: { url: `${WEB_BASE_URL}/pay?method=tribute&user=${id}` }}],
+            [{ text: "⬅️ Ortga", callback_data: "back_main" }]
+          ]
+        }
+      });
+    }
 
-  if (data === "toggle_remind") {
-    await User.updateOne({ user_id: id }, { remind_on: !u.remind_on });
-    return bot.answerCallbackQuery(q.id, {
-      text: u.remind_on ? "🔕 O‘chirildi" : "🔔 Yoqildi",
-    });
-  }
+    case "menu_payments": {
+      const payments = (u.history || []).slice(-5).reverse();
+      const list = payments.length
+        ? payments.map((p, i) =>
+          `${i+1}. ${new Date(p.date).toLocaleDateString()} — ${p.amount} — ${p.method} ${p.status==="success"?"✅":"❌"}`
+        ).join("\n")
+        : "Hali to‘lovlar yo‘q.";
 
-  // 4) FAQ
-  if (data === "menu_faq") {
-    return bot.editMessageText(
-      `<b>📚 FAQ</b>
-
-1️⃣ Obuna 30 kun davom etadi  
-2️⃣ 3 marta to‘lov o‘tmasa, chiqariladi  
-3️⃣ Bonus kun bo‘lsa — chiqarilmaydi
-4️⃣ To‘lov Click yoki Tribute orqali`,
-      {
+      return bot.editMessageText(`<b>💳 To‘lovlar tarixi</b>\n\n${list}`, {
         chat_id: id,
         message_id: q.message.message_id,
         parse_mode: "HTML",
-        reply_markup: { inline_keyboard: [[{ text: "⬅️ Ortga", callback_data: "back_main" }]] },
-      }
-    );
-  }
+        reply_markup: { inline_keyboard: [[{ text: "⬅️ Ortga", callback_data: "back_main" }]] }
+      });
+    }
 
-  // 5) ALOQA
-  if (data === "menu_support") {
-    return bot.editMessageText(
-      `<b>📞 Aloqa</b>
+    case "menu_settings":
+      return bot.editMessageText(`<b>⚙️ Sozlamalar</b>
 
-Admin: @YangiOdatAdmin`,
-      {
+Eslatmalar: ${u.remind_on ? "🔔 Yoqilgan" : "🔕 O‘chik"}
+`, {
         chat_id: id,
         message_id: q.message.message_id,
         parse_mode: "HTML",
-        reply_markup: { inline_keyboard: [[{ text: "⬅️ Ortga", callback_data: "back_main" }]] },
-      }
-    );
-  }
+        reply_markup: {
+          inline_keyboard: [
+            [{ text: u.remind_on ? "🔕 O‘chirish" : "🔔 Yoqish", callback_data: "toggle_remind" }],
+            [{ text: "⬅️ Ortga", callback_data: "back_main" }]
+          ]
+        }
+      });
 
-  if (data === "back_main") {
-    return bot.editMessageText("Asosiy menyu 👇", {
-      chat_id: id,
-      message_id: q.message.message_id,
-      parse_mode: "HTML",
-      reply_markup: mainMenu(),
-    });
+    case "toggle_remind":
+      await updateUser(id, { remind_on: !u.remind_on });
+      return bot.answerCallbackQuery(q.id, { text: "✔️ Saqlandi" });
+
+    case "menu_faq":
+      return bot.editMessageText(`
+<b>📚 FAQ</b>
+
+1️⃣ Obuna 30 kun amal qiladi.  
+2️⃣ To‘lov Click/Tribute orqali.  
+3️⃣ 3 marta to‘lov o‘tmasa — chiqariladi.  
+4️⃣ Bonus kunlar tugamaguncha chiqarilmaydi.
+
+`, {
+        chat_id: id,
+        message_id: q.message.message_id,
+        parse_mode: "HTML",
+        reply_markup: { inline_keyboard: [[{ text: "⬅️ Ortga", callback_data: "back_main" }]] }
+      });
+
+    case "menu_support":
+      return bot.editMessageText(`
+<b>📞 Yordam</b>
+
+Savollar: @YangiOdatAdmin
+`, {
+        chat_id: id,
+        message_id: q.message.message_id,
+        parse_mode: "HTML",
+        reply_markup: { inline_keyboard: [[{ text: "⬅️ Ortga", callback_data: "back_main" }]] }
+      });
+
+    case "back_main":
+      return bot.editMessageText("Asosiy menyu 👇", {
+        chat_id: id,
+        message_id: q.message.message_id,
+        parse_mode: "HTML",
+        reply_markup: mainMenu()
+      });
   }
 });
 
-// ================== EXPRESS (PAYMENT) ===================
+// ===================== EXPRESS (PAYMENT PAGES) ===
 const app = express();
-app.use(bodyParser.urlencoded({ extended: true }));
 app.use(bodyParser.json());
+app.use(bodyParser.urlencoded({ extended: true }));
 
-// =========== PAYMENT PAGE ==============
+// ▶ CLICK / TRIBUTE uchun to‘lov sahifasi
 app.get("/pay", (req, res) => {
-  const user = req.query.user;
   const method = req.query.method;
+  const user = req.query.user;
 
-  if (!user) return res.send("User yo‘q");
+  return res.send(`
+<html><body style="font-family:Arial;padding:30px">
 
-  res.send(`
-  <h2>Yangi Odat — To‘lov</h2>
-  <p>User: <b>${user}</b></p>
-  <p>Usul: <b>${method}</b></p>
-  <p>Summa: <b>${PRICE}</b> so‘m</p>
+<h2>Yangi Odat Club — To‘lov</h2>
 
-  <!-- TODO: CLICK yoki TRIBUTE API bu yerda bo‘ladi -->
+Foydalanuvchi: <b>${user}</b><br>
+Usul: <b>${method}</b><br>
+Summa: <b>${PRICE}</b>
 
-  <form method="POST" action="/payment/test">
-    <input type="hidden" name="user" value="${user}" />
-    <input type="hidden" name="method" value="${method}" />
+<br><br>
 
-    <button>TEST – To‘lovni tasdiqlash</button>
-  </form>
-  `);
+<!-- ❗ BU JOYGA CLICK LINKI / TRIBUTE LINKI QO‘YILADI -->
+
+<p>Test rejimi:</p>
+
+<form method="POST" action="/payment/mock">
+  <input type="hidden" name="user" value="${user}">
+  <input type="hidden" name="method" value="${method}">
+  <button>Test to‘lovni tasdiqlash</button>
+</form>
+
+</body></html>
+`);
 });
 
-// =========== TEST PAYMENT ================
-app.post("/payment/test", async (req, res) => {
+// ▶ TEST PAYMENT (hozircha)
+app.post("/payment/mock", async (req, res) => {
   try {
-    const id = Number(req.body.user);
+    const userId = Number(req.body.user);
     const method = req.body.method;
 
-    let u = await ensureUser(id);
-
-    // 30 kun qo‘shiladi
     const now = new Date();
     const exp = new Date(now);
     exp.setDate(exp.getDate() + 30);
 
-    await User.updateOne(
-      { user_id: id },
-      {
-        status: "active",
-        payment_method: method,
-        joined_at: now,
-        expires_at: exp,
-        retry_count: 0,
-      }
-    );
-
-    await Payment.create({
-      user_id: id,
-      date: now,
-      amount: PRICE,
-      method,
-      status: "success",
+    await updateUser(userId, {
+      status: "active",
+      payment_method: method,
+      joined_at: now.toISOString(),
+      expires_at: exp.toISOString(),
+      retry_count: 0
     });
 
-    // invite link
+    await addPayment(userId, {
+      date: now.toISOString(),
+      amount: PRICE,
+      method,
+      status: "success"
+    });
+
+    // Kanalga yangi invite link
     let inviteLink = "https://t.me/YangiOdatClub";
     try {
       const inv = await bot.createChatInviteLink(CHANNEL_ID, {
         member_limit: 1,
-        expire_date: Math.floor(Date.now() / 1000) + 86400,
+        expire_date: Math.floor(Date.now() / 1000) + 86400
       });
       inviteLink = inv.invite_link;
-    } catch {}
+    } catch (e) {}
 
-    await bot.sendMessage(
-      id,
-      `✅ To‘lov tasdiqlandi (TEST)
+    await bot.sendMessage(userId, `
+<b>✅ To‘lov tasdiqlandi (TEST)</b>
 
-🌱 30 kunlik Premium faollashtirildi.
-Kirish havolasi:`,
-      {
-        parse_mode: "HTML",
-        reply_markup: {
-          inline_keyboard: [[{ text: "🌱 Kirish", url: inviteLink }]],
-        },
+🌱 Premium kanalga kirish:
+`, {
+      parse_mode: "HTML",
+      reply_markup: {
+        inline_keyboard: [[{ text: "🌱 Kirish", url: inviteLink }]]
       }
-    );
+    });
 
-    res.send("OK, Telegramga qayting 😊");
+    return res.send("OK");
   } catch (e) {
-    console.log(e);
-    res.send("Server xato");
+    console.error(e);
+    res.status(500).send("Server xato");
   }
 });
 
-// ================== AUTO CHARGE CRON ===================
+// ===================== CRON JOBS =================
+// Har 12 soatda to‘lov tekshiradi
 schedule.scheduleJob("0 */12 * * *", async () => {
   const users = await User.find({});
   const now = new Date();
 
   for (const u of users) {
-    if (u.bonus_days > 0) continue; // bonus bo‘lsa — to‘lov talab qilinmaydi
+    if (u.bonus_days > 0) continue;
     if (!["active", "grace"].includes(u.status)) continue;
     if (!u.expires_at || new Date(u.expires_at) > now) continue;
 
-    // TO‘LOV VAQTI KELDI
-    u.retry_count = (u.retry_count || 0) + 1;
-    u.status = "grace";
-    await u.save();
+    const retry = (u.retry_count || 0) + 1;
 
-    if (u.retry_count >= 3) {
+    await updateUser(u.user_id, { retry_count: retry, status: "grace" });
+
+    if (retry >= 3) {
       try {
         await bot.kickChatMember(CHANNEL_ID, u.user_id);
       } catch {}
+      await updateUser(u.user_id, { status: "inactive" });
 
-      u.status = "inactive";
-      await u.save();
+      await bot.sendMessage(u.user_id, `
+❌ Obunangiz to‘xtatildi.
+`, { parse_mode: "HTML" });
 
-      await bot.sendMessage(
-        u.user_id,
-        "❌ To‘lov amalga oshmadi. Kanaldan chiqarildingiz.",
-        { parse_mode: "HTML" }
-      );
     } else {
       if (u.remind_on) {
-        await bot.sendMessage(
-          u.user_id,
-          `⚠️ To‘lov muvaffaqiyatsiz (urinish ${u.retry_count}/3). Iltimos, kartangizni to‘ldiring.`,
-          { parse_mode: "HTML" }
-        );
+        bot.sendMessage(u.user_id, `
+⚠️ To‘lov amalga oshmadi.
+Iltimos kartangizni tekshiring.
+`, { parse_mode: "HTML" });
       }
     }
   }
 });
 
-// BONUS KUNLARNI KAMAYTIRISH
+// Har kuni 09:00 — bonusdan -1 kun kamaytirish
 schedule.scheduleJob("0 9 * * *", async () => {
-  const users = await User.find({ bonus_days: { $gt: 0 } });
-  for (const u of users) {
-    u.bonus_days--;
-    await u.save();
-  }
+  await User.updateMany(
+    { bonus_days: { $gt: 0 } },
+    { $inc: { bonus_days: -1 } }
+  );
 });
 
-// ================== START SERVER ===================
+// ===================== START SERVER ==============
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => {
-  console.log("🚀 Server ishga tushdi → " + PORT);
-});
+app.listen(PORT, () => console.log(`🚀 Server ishga tushdi → ${PORT}`));
