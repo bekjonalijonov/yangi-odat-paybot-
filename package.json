@@ -1,20 +1,16 @@
 {
-  "name": "yangi-odat-paybot-",
+  "name": "yangi-odat-paybot",
   "version": "1.0.0",
-  "main": "index.js",
   "type": "module",
+  "main": "index.js",
   "scripts": {
-    "start": "node index.js",
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "start": "node index.js"
   },
-  "keywords": [],
-  "author": "",
-  "license": "ISC",
-  "description": "",
   "dependencies": {
-    "body-parser": "^2.2.0",
-    "express": "^5.1.0",
-    "node-schedule": "^2.1.1",
-    "node-telegram-bot-api": "^0.66.0"
+    "express": "^4.18.2",
+    "body-parser": "^1.20.2",
+    "mongoose": "^8.1.0",
+    "node-telegram-bot-api": "^0.61.0",
+    "node-schedule": "^2.1.0"
   }
 }
