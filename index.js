@@ -15,7 +15,7 @@ const BOT_TOKEN           = process.env.BOT_TOKEN;
 const CHANNEL_ID          = process.env.CHANNEL_ID;        // -100xxxxxxxxxxxx
 const PRICE               = Number(process.env.PRICE || 40000);
 const WEB_BASE_URL        = process.env.WEB_BASE_URL;      // https://yourapp.up.railway.app
-const MONGODB_URI         = process.env.MONGODB_URI;       // mongodb+srv://...
+const MONGODB_URL         = process.env.MONGODB_URL;       // mongodb+srv://...
 const ADMIN_IDS           = (process.env.ADMIN_IDS || "")
   .split(",")
   .map(x => Number(x.trim()))
@@ -23,13 +23,13 @@ const ADMIN_IDS           = (process.env.ADMIN_IDS || "")
 const AUTO_CHARGE_ENABLED = String(process.env.AUTO_CHARGE_ENABLED || "false")
   .toLowerCase() === "true";
 
-if (!BOT_TOKEN || !CHANNEL_ID || !WEB_BASE_URL || !MONGODB_URI) {
-  console.error("❌ BOT_TOKEN, CHANNEL_ID, WEB_BASE_URL, MONGODB_URI majburiy!");
+if (!BOT_TOKEN || !CHANNEL_ID || !WEB_BASE_URL || !MONGODB_URL) {
+  console.error("❌ BOT_TOKEN, CHANNEL_ID, WEB_BASE_URL, MONGODB_URL majburiy!");
   process.exit(1);
 }
 
 // ==================  MONGO  ======================
-await mongoose.connect(MONGODB_URI, {});
+await mongoose.connect(MONGODB_URL, {});
 
 // --- User model ---
 const userSchema = new mongoose.Schema({
@@ -127,7 +127,6 @@ function mainMenu() {
       [{ text: "🎟 Obuna holatim", callback_data: "menu_status" }],
       [{ text: "💳 Obuna olish / yangilash", callback_data: "menu_pay" }],
       [{ text: "🧾 To‘lovlar tarixi", callback_data: "menu_history" }],
-      [{ text: "🧩 Ilova menyusi (web)", url: APP_URL }],
       [{ text: "⚙️ Sozlamalar", callback_data: "menu_settings" }],
       [{ text: "📚 Qo‘llanma", callback_data: "menu_faq" }],
       [{ text: "📞 Aloqa va yordam", callback_data: "menu_support" }]
